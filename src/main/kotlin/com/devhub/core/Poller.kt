@@ -46,7 +46,7 @@ class Poller(
             // Kick everything off concurrently; the slow part (pipelines + AI) is awaited last.
             val pipelinesDeferred = async {
                 if (config.pipelineRepos.isEmpty()) emptyList()
-                else runCatching { github.fetchRecentFailures(config.pipelineRepos, config.pipelines.maxShown) }
+                else runCatching { github.fetchRecentFailures(config.pipelineRepos, config.pipelines.maxShown, config.pipelines.excludeWorkflows) }
                     .onFailure { errors += "GitHub Actions: ${it.message}" }
                     .getOrDefault(emptyList())
             }

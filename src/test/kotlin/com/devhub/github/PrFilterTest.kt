@@ -16,6 +16,8 @@ class PrFilterTest {
         draft: Boolean = false,
         ci: String = "SUCCESS",
         reviews: List<ReviewNode> = listOf(claudeReviewOn("sha-head")),
+        inMergeQueue: Boolean = false,
+        autoMerge: AutoMergeRequest? = null,
     ) = PrNode(
         typename = "PullRequest",
         number = number,
@@ -24,6 +26,8 @@ class PrFilterTest {
         isDraft = draft,
         updatedAt = "2026-06-01T10:00:00Z",
         headRefOid = head,
+        isInMergeQueue = inMergeQueue,
+        autoMergeRequest = autoMerge,
         author = Actor("alice", "User"),
         repository = Repository("o/r"),
         commits = CommitConnection(listOf(CommitNode(Commit(StatusCheckRollup(ci))))),
@@ -64,6 +68,17 @@ class PrFilterTest {
         val r = PrFilter.apply(listOf(pr(1, reviews = listOf(human))), cfg, bot)
         assertTrue(r.visible.isEmpty())
         assertEquals(listOf(HideReason.CLAUDE_NOT_REVIEWED), r.hidden.single().second)
+    }
+
+    @Test fun `hides PR in the merge queue`() {
+        val r = PrFilter.apply(listOf(pr(1, inMergeQueue = true)), cfg, bot)
+        assertTrue(r.visible.isEmpty())
+        assertEquals(listOf(HideReason.QUEUED), r.hidden.single().second)
+    }
+
+    @Test fun `hides PR with auto-merge enabled`() {
+        val r = PrFilter.apply(listOf(pr(1, autoMerge = AutoMergeRequest("2026-06-01T10:00:00Z"))), cfg, bot)
+        assertEquals(listOf(HideReason.QUEUED), r.hidden.single().second)
     }
 
     @Test fun `accumulates multiple hide reasons`() {

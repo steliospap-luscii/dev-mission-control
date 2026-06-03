@@ -90,15 +90,23 @@ class GithubClient(private val token: String) : AutoCloseable {
      * fetched per-repo first, then sorted and capped — so we only download job logs for the
      * handful we'll actually show.
      */
-    suspend fun fetchRecentFailures(repos: List<String>, limit: Int): List<FailureWithLog> {
+    suspend fun fetchRecentFailures(
+        repos: List<String>,
+        limit: Int,
+        excludeWorkflows: List<String> = emptyList(),
+    ): List<FailureWithLog> {
         val recent = repos.flatMap { repo ->
             runCatching {
                 val (owner, name) = parseRepo(repo)
                 http.get("$REST/repos/$owner/$name/actions/runs") {
                     parameter("status", "failure")
-                    parameter("per_page", limit.coerceIn(1, 100))
+                    parameter("per_page", 100) // fetch broadly, then filter violations + cap
                 }.body<WorkflowRunsResponse>().workflowRuns.map { repo to it }
             }.getOrElse { emptyList() }
+        }.filterNot { (_, run) ->
+            // Drop quality/policy-gate failures — they catch violations devs fix, not CI errors.
+            val name = run.name ?: run.displayTitle ?: ""
+            excludeWorkflows.any { it.isNotBlank() && name.contains(it, ignoreCase = true) }
         }.sortedByDescending { it.second.runStartedAt ?: "" }.take(limit.coerceAtLeast(1))
 
         return recent.mapNotNull { (repo, run) ->

@@ -140,6 +140,10 @@ private fun config() {
         .lowercase().startsWith("y")
     val aiBackend = if (aiOn) ask("AI backend (auto/cli/api/off)", existing.pipelines.aiBackend.ifBlank { "auto" })
         else existing.pipelines.aiBackend
+    val excluded = ask(
+        "Workflows to treat as violations, not errors (comma-separated, hidden from Platform)",
+        existing.pipelines.excludeWorkflows.joinToString(","),
+    ).split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
     val poll = ask("Poll interval (seconds)", existing.pollSeconds.toString()).toIntOrNull() ?: existing.pollSeconds
     val notify = ask("Desktop notifications? (y/n)", if (existing.notifications) "y" else "n")
@@ -151,7 +155,7 @@ private fun config() {
         claudeBotLogin = botLogin,
         sonar = SonarConfig(baseUrl = sonarBase, organization = sonarOrg, projectKeys = sonarProjects),
         progress = existing.progress.copy(coverageGoalPct = covGoal, newCoverageGoalPct = newCovGoal),
-        pipelines = existing.pipelines.copy(maxShown = maxPipes, aiAnalysis = aiOn, aiBackend = aiBackend),
+        pipelines = existing.pipelines.copy(maxShown = maxPipes, aiAnalysis = aiOn, aiBackend = aiBackend, excludeWorkflows = excluded),
         pollSeconds = poll,
         notifications = notify,
     )
@@ -192,12 +196,11 @@ private fun probe() {
 
     t.println(bold("\nMAINTENANCE — ${state.quality.size} project(s)"))
     state.quality.forEach { q ->
-        val gate = if (q.gateStatus == "OK") brightGreen("PASSED") else if (q.gateStatus == "ERROR") brightRed("FAILED") else gray("—")
-        t.println("  ${q.projectName}  gate $gate" + (q.coverage?.let { gray("  cov ${"%.1f".format(it)}%") } ?: "") + (q.newCoverage?.let { gray("  new ${"%.1f".format(it)}%") } ?: ""))
+        val gate = if (q.gateStatus == "OK") brightGreen("gate ✓") else gray("gate ◦")
+        t.println("  ${q.projectName}  $gate" + (q.coverage?.let { gray("  cov ${"%.1f".format(it)}%") } ?: "") + (q.newCoverage?.let { gray("  new ${"%.1f".format(it)}%") } ?: ""))
         fun letter(r: Int?) = when (r) { 1 -> "A"; 2 -> "B"; 3 -> "C"; 4 -> "D"; 5 -> "E"; else -> "—" }
         val extra = listOfNotNull(q.duplication?.let { "dup ${"%.1f".format(it)}%" }, q.ncloc?.let { "LOC $it" }).joinToString(" · ")
         t.println(gray("      R:${letter(q.reliabilityRating)} S:${letter(q.securityRating)} M:${letter(q.maintainabilityRating)} · bugs ${q.bugs ?: 0} · vulns ${q.vulnerabilities ?: 0} · smells ${q.codeSmells ?: q.newCodeSmells ?: 0} · hotspots ${q.securityHotspots ?: 0}" + if (extra.isNotBlank()) " · $extra" else ""))
-        q.failingConditions.forEach { c -> t.println("      ${brightRed("└")} ${c.label}: ${c.actual} ${c.op} ${c.threshold}") }
     }
 
     t.println(bold("\nGOALS — role progress"))

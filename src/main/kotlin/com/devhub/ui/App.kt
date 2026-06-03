@@ -21,6 +21,7 @@ import com.jakewharton.mosaic.ui.Column
 import com.jakewharton.mosaic.ui.Row
 import com.jakewharton.mosaic.ui.Text
 import com.jakewharton.mosaic.ui.TextStyle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlin.system.exitProcess
@@ -49,8 +50,13 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
     // immediately instead of waiting on the slow AI step.
     LaunchedEffect(refreshKey) {
         state = state.copy(loading = true)
-        runCatching { poller.pollProgressive().collect { state = it } }
-            .onFailure { state = state.copy(loading = false, errors = listOf("poll failed: ${it.message}")) }
+        try {
+            poller.pollProgressive().collect { state = it }
+        } catch (e: CancellationException) {
+            throw e // a manual refresh cancels the in-flight poll — not an error
+        } catch (e: Throwable) {
+            state = state.copy(loading = false, errors = listOf("poll failed: ${e.message}"))
+        }
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -131,7 +137,7 @@ private fun TabBar(tabs: List<Role>, active: Int, state: DashboardState) {
             val count = when (role) {
                 Role.DEV -> state.prs.size
                 Role.PLATFORM -> state.pipelines.size
-                Role.MAINTENANCE -> state.quality.count { it.gateStatus == "ERROR" }
+                Role.MAINTENANCE -> 0 // quality is informational, not an alarm count
                 Role.GOALS -> state.metrics.count { it.goal != null && (it.value ?: 0.0) < it.goal }
             }
             val isActive = i == active

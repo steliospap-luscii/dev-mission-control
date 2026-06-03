@@ -21,6 +21,8 @@ object Queries {
                 isDraft
                 updatedAt
                 headRefOid
+                isInMergeQueue
+                autoMergeRequest { enabledAt }
                 author { login }
                 repository { nameWithOwner }
                 commits(last: 1) {

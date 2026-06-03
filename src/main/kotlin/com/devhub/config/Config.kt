@@ -55,12 +55,19 @@ data class PrFilterConfig(
     val requireClaudeBotReviewed: Boolean = true,
     val requireNotDraft: Boolean = true,
     val requireCiGreen: Boolean = true,
+    /** Hide PRs already in the merge queue or with auto-merge enabled (effectively done). */
+    val requireNotQueued: Boolean = true,
 )
 
 @Serializable
 data class PipelineConfig(
     /** Cap the Platform tab to the N most-recent failures across watched repos. */
     val maxShown: Int = 5,
+    /**
+     * Workflow names (case-insensitive substring) treated as quality/policy violations rather
+     * than real CI errors, and hidden from the Platform tab — e.g. SonarCloud/detekt gates.
+     */
+    val excludeWorkflows: List<String> = listOf("Quality Gate"),
     /** Use Claude to summarize the real root cause of each failure. */
     val aiAnalysis: Boolean = true,
     /** Backend: "auto" (prefer local `claude` CLI, else API), "cli", "api", or "off". */

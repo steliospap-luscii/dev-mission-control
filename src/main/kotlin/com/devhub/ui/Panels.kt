@@ -2,7 +2,6 @@ package com.devhub.ui
 
 import com.devhub.core.CiHealth
 import com.devhub.core.DashboardState
-import com.devhub.core.QualityReport
 import com.devhub.core.TrackedMetric
 import com.jakewharton.mosaic.ui.Color
 
@@ -20,30 +19,44 @@ fun devLines(state: DashboardState, selection: Int, width: Int, expanded: Boolea
     if (state.prs.isEmpty()) {
         b.add(seg(if (state.loading) "◴ Loading review queue…" else "✓ Nothing needs your review right now.", if (state.loading) Theme.info else OK))
     } else {
-        b.add(seg("PRs that need your review", Theme.accent, bold = true))
-        val titleW = (width - 34).coerceIn(20, 140)
+        b.add(seg("PRs that need your review  (${state.prs.size})", Theme.accent, bold = true))
+        b.blank()
+        // Table columns; TITLE flexes with terminal width.
+        val cAuthor = 14; val cRepo = 22; val cAge = 4; val cNum = 6
+        val cTitle = (width - 2 - cNum - cRepo - cAuthor - cAge - 8).coerceIn(16, 120)
+        b.add(
+            seg("  ", DIM),
+            seg(pad("#", cNum), DIM, bold = true), gut(),
+            seg(pad("TITLE", cTitle), DIM, bold = true), gut(),
+            seg(pad("REPO", cRepo), DIM, bold = true), gut(),
+            seg(pad("AUTHOR", cAuthor), DIM, bold = true), gut(),
+            seg(pad("AGE", cAge), DIM, bold = true),
+        )
+        b.add(rule(width))
         state.prs.forEachIndexed { i, pr ->
             val sel = i == selection
             if (sel) b.anchorHere()
+            val fg = if (sel) SELECTED else TEXT
             b.add(
-                seg(if (sel) "● " else "  ", if (sel) Theme.accent else DIM),
-                seg("#${pr.number} ".padEnd(7), if (sel) SELECTED else TEXT, bold = sel),
-                seg(pad(pr.title, titleW), if (sel) SELECTED else TEXT),
-                seg(" ✓CI", OK), seg(" ✓claude", OK),
-                seg(" ${Format.ago(pr.updatedAt)}".padStart(5), DIM),
+                leadBar(sel),
+                seg(pad("#${pr.number}", cNum), fg, bold = sel), gut(),
+                seg(pad(pr.title, cTitle), fg), gut(),
+                seg(pad(repoShort(pr.repo), cRepo), DIM), gut(),
+                seg(pad(pr.author, cAuthor), DIM), gut(),
+                seg(pad(Format.ago(pr.updatedAt), cAge), DIM),
             )
-            if (sel) b.add(seg("    ${repoShort(pr.repo)}  ·  @${pr.author}  ·  ${Format.shortSha(pr.headSha)}", DIM))
         }
     }
     if (state.prsHidden > 0) {
+        b.blank()
         b.add(seg("  ⋯ ${state.prsHidden} hidden (${if (expanded) "press x to collapse" else "press x to expand"})", Theme.accent))
         if (expanded) {
-            val titleW = (width - 26).coerceIn(20, 140)
+            val titleW = (width - 30).coerceIn(20, 140)
             state.hiddenPrs.forEach { h ->
                 b.add(
                     seg("    #${h.pr.number} ".padEnd(9), DIM),
-                    seg(pad(h.pr.title, titleW), TEXT),
-                    seg(" [${h.reasons.joinToString(", ")}]", WARN),
+                    seg(pad(h.pr.title, titleW), TEXT), gut(),
+                    seg("[${h.reasons.joinToString(", ")}]", WARN),
                 )
             }
         }
@@ -59,34 +72,43 @@ fun platformLines(state: DashboardState, selection: Int, width: Int, expanded: B
         b.add(seg(if (state.loading) "◴ Analyzing pipelines…" else "✓ No failing pipelines in watched repos.", if (state.loading) Theme.info else OK))
         return b
     }
-    b.add(seg("Failing pipelines (most recent ${state.pipelines.size})" + if (state.loading) "  ◴ analyzing…" else "", Theme.accent, bold = true))
+    b.add(seg("Failing pipelines  (most recent ${state.pipelines.size})" + if (state.loading) "   ◴ analyzing…" else "", Theme.accent, bold = true))
+    b.blank()
     state.pipelines.forEachIndexed { i, p ->
         val sel = i == selection
         if (sel) b.anchorHere()
-        val headline = "${repoShort(p.repo)} · ${p.workflowName} · ${p.branch}" + (p.failedJob?.let { " · $it" } ?: "")
+        // Line 1: workflow (the distinguishing name) + age.
         b.add(
-            seg(if (sel) "✗ " else "  ", BAD, bold = sel),
-            seg(pad(headline, (width - 8).coerceIn(20, 180)), if (sel) SELECTED else TEXT),
-            seg(" ${Format.ago(p.startedAt)}".padStart(5), DIM),
+            leadBar(sel),
+            seg("✗ ", BAD, bold = true),
+            seg(pad(p.workflowName, (width - 14).coerceIn(16, 150)), if (sel) SELECTED else TEXT, bold = sel),
+            seg(Format.ago(p.startedAt).padStart(4), DIM),
         )
+        // Line 2: context (repo · branch · job), dim.
+        val context = listOfNotNull(repoShort(p.repo), p.branch, p.failedJob).joinToString("  ·  ")
+        b.add(seg("    ", DIM), seg(pad(context, width - 6), DIM))
+        // Line 3+: the cause.
         val cause = p.rootCause
         if (cause != null) {
             val lines = cause.lines().filter { it.isNotBlank() }
             when {
                 sel && expanded -> lines.forEach { line ->
-                    val pointer = line.trimStart().startsWith("→")
-                    wordWrap(line, width - 6).forEach { b.add(seg("    $it", if (pointer) WARN else TEXT)) }
+                    val ptr = line.trimStart().startsWith("→")
+                    wordWrap(line.removePrefix("→").trim(), width - 8).forEachIndexed { j, w ->
+                        b.add(seg(if (ptr && j == 0) "    → " else "      ", if (ptr) WARN else DIM), seg(w, if (ptr) WARN else TEXT))
+                    }
                 }
                 sel -> lines.forEach { line ->
-                    val pointer = line.trimStart().startsWith("→")
-                    b.add(seg("    ${pad(line, width - 6)}", if (pointer) WARN else TEXT))
+                    val ptr = line.trimStart().startsWith("→")
+                    b.add(seg(if (ptr) "    → " else "      ", if (ptr) WARN else DIM), seg(pad(line.removePrefix("→").trim(), width - 8), if (ptr) WARN else TEXT))
                 }
-                else -> b.add(seg("    ${pad(lines.first(), width - 8)}", DIM))
+                else -> b.add(seg("      ", DIM), seg(pad(lines.first(), width - 8), DIM))
             }
         } else {
-            if (sel) p.errorExcerpt.forEach { b.add(seg("    │ ${pad(it, width - 8)}", WARN)) }
-            else p.errorExcerpt.lastOrNull()?.let { b.add(seg("    │ ${pad(it, width - 8)}", DIM)) }
+            if (sel) p.errorExcerpt.forEach { b.add(seg("      │ ", DIM), seg(pad(it, width - 10), WARN)) }
+            else p.errorExcerpt.lastOrNull()?.let { b.add(seg("      │ ", DIM), seg(pad(it, width - 10), DIM)) }
         }
+        b.blank()
     }
     return b
 }
@@ -100,33 +122,33 @@ fun maintenanceLines(state: DashboardState, selection: Int, width: Int): LineBuf
         return b
     }
     b.add(seg("Code quality (SonarCloud)", Theme.accent, bold = true))
+    b.blank()
     state.quality.forEachIndexed { i, q ->
         val sel = i == selection
         if (sel) b.anchorHere()
-        val gateColor = when (q.gateStatus) { "OK" -> OK; "ERROR" -> BAD; else -> DIM }
-        val gateLabel = when (q.gateStatus) { "OK" -> "PASSED"; "ERROR" -> "FAILED"; else -> "—" }
+        // Gate is shown as neutral info, not a red alarm — it "fails" on new-code violations
+        // that devs fix in their PRs, which isn't a maintenance-role signal.
+        val gateLabel = when (q.gateStatus) { "OK" -> "gate ✓"; "ERROR" -> "gate ◦"; else -> "gate —" }
+        val gateColor = if (q.gateStatus == "OK") OK else Theme.info
         val head = mutableListOf(
-            seg(if (sel) "● " else "  ", if (sel) Theme.accent else DIM),
-            seg(pad(q.projectName, (width - 40).coerceIn(16, 60)), if (sel) SELECTED else TEXT),
-            seg(" ", DIM),
-            seg(gateLabel.padEnd(7), gateColor, bold = true),
+            leadBar(sel),
+            seg(pad(q.projectName, (width - 40).coerceIn(16, 60)), if (sel) SELECTED else TEXT, bold = sel), gut(),
+            seg(pad(gateLabel, 7), gateColor),
         )
-        if (q.coverage != null) head += seg("cov ${"%.1f".format(q.coverage)}%", coverageColor(q.coverageDelta))
+        if (q.coverage != null) head += seg("  cov ${"%.1f".format(q.coverage)}%", coverageColor(q.coverageDelta))
         if (q.newCoverage != null) head += seg("  new ${"%.1f".format(q.newCoverage)}%", DIM)
         b.add(head)
 
-        // Ratings + counts line.
-        val line = mutableListOf(seg("      ", DIM))
+        // Quality metrics the maintenance role actually tracks for improvement.
+        val line = mutableListOf(seg("    ", DIM))
         line += ratingSegs("R", q.reliabilityRating); line += ratingSegs("S", q.securityRating); line += ratingSegs("M", q.maintainabilityRating)
+        line += seg("  ", DIM)
         line += countSeg("bugs", q.bugs, danger = true); line += countSeg("vulns", q.vulnerabilities, danger = true)
         line += countSeg("smells", q.codeSmells ?: q.newCodeSmells); line += countSeg("hotspots", q.securityHotspots)
         if (q.duplication != null) line += seg("dup ${"%.1f".format(q.duplication)}%  ", if (q.duplication > 3) WARN else DIM)
         if (q.ncloc != null) line += seg("LOC ${loc(q.ncloc)}", DIM)
         b.add(line)
-
-        if (sel) q.failingConditions.forEach { c ->
-            b.add(seg("      └ ", DIM), seg("${c.label}: ", TEXT), seg("${c.actual} ${c.op} ${c.threshold}", BAD))
-        }
+        b.blank()
     }
     return b
 }
@@ -136,6 +158,7 @@ fun maintenanceLines(state: DashboardState, selection: Int, width: Int): LineBuf
 fun goalsLines(state: DashboardState, selection: Int, width: Int): LineBuf {
     val b = LineBuf()
     b.add(seg("Role progress", Theme.accent, bold = true))
+    b.blank()
     if (state.metrics.all { it.value == null }) {
         b.add(seg(if (state.loading) "◴ Loading metrics…" else "No metrics yet (check SonarCloud project + repos).", DIM))
     } else {
@@ -144,6 +167,7 @@ fun goalsLines(state: DashboardState, selection: Int, width: Int): LineBuf {
     }
     b.blank()
     b.add(seg("CI health (recent runs)", Theme.accent, bold = true))
+    b.blank()
     if (state.ci.isEmpty()) {
         b.add(seg(if (state.loading) "◴ Loading CI stats…" else "No repos configured for CI health.", DIM))
     } else {
@@ -152,7 +176,7 @@ fun goalsLines(state: DashboardState, selection: Int, width: Int): LineBuf {
             val sel = i == selection
             if (sel) b.anchorHere()
             b.add(ciSegs(h, sel, barW))
-            if (sel && h.topFailingWorkflow != null) b.add(seg("    └ most-failing workflow: ${h.topFailingWorkflow}", DIM))
+            if (sel && h.topFailingWorkflow != null) b.add(seg("      └ most-failing workflow: ${h.topFailingWorkflow}", DIM))
         }
     }
     return b
@@ -177,8 +201,8 @@ private fun metricSegs(m: TrackedMetric, barW: Int): List<Seg> {
 private fun ciSegs(h: CiHealth, sel: Boolean, barW: Int): List<Seg> {
     val color = when { h.failureRatePct >= 30 -> BAD; h.failureRatePct >= 10 -> WARN; else -> OK }
     return listOf(
-        seg(if (sel) "● " else "  ", if (sel) Theme.accent else DIM),
-        seg(pad(repoShort(h.repo), 28), if (sel) SELECTED else TEXT),
+        leadBar(sel),
+        seg(pad(repoShort(h.repo), 28), if (sel) SELECTED else TEXT, bold = sel),
         seg("fail ", DIM),
         seg(("%.0f%%".format(h.failureRatePct)).padEnd(5), color, bold = true),
         seg(bar(h.failureRatePct, 100.0, barW) + " ", color),
@@ -187,6 +211,13 @@ private fun ciSegs(h: CiHealth, sel: Boolean, barW: Int): List<Seg> {
 }
 
 // ---------------- shared helpers ----------------
+
+/** Accent left-bar for the selected row; blank gutter otherwise. */
+private fun leadBar(sel: Boolean): Seg = seg(if (sel) "▌ " else "  ", if (sel) Theme.accent else DIM, bold = sel)
+
+private fun gut(): Seg = seg("  ", DIM)
+
+private fun rule(width: Int): List<Seg> = listOf(seg("  " + "─".repeat((width - 2).coerceIn(10, 198)), DIM))
 
 private fun ratingSegs(label: String, r: Int?): List<Seg> =
     listOf(seg("$label:", DIM), seg("${ratingLetter(r)} ", ratingColor(r), bold = true))

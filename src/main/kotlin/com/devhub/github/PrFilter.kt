@@ -9,6 +9,7 @@ enum class HideReason(val label: String) {
     DRAFT("draft"),
     CI_NOT_GREEN("CI not green"),
     CLAUDE_NOT_REVIEWED("awaiting claude[bot]"),
+    QUEUED("queued to merge"),
 }
 
 data class FilterResult(
@@ -24,6 +25,7 @@ object PrFilter {
      *   2. claude[bot] has reviewed the *current head SHA*
      *   3. not a draft
      *   4. CI is green
+     *   5. not already queued to merge (merge queue / auto-merge)
      */
     fun apply(nodes: List<PrNode>, cfg: PrFilterConfig, claudeBotLogin: String): FilterResult {
         val visible = mutableListOf<ReviewPr>()
@@ -36,6 +38,7 @@ object PrFilter {
                 if (cfg.requireNotDraft && node.isDraft) add(HideReason.DRAFT)
                 if (cfg.requireCiGreen && !pr.ciGreen) add(HideReason.CI_NOT_GREEN)
                 if (cfg.requireClaudeBotReviewed && !pr.claudeReviewed) add(HideReason.CLAUDE_NOT_REVIEWED)
+                if (cfg.requireNotQueued && (node.isInMergeQueue || node.autoMergeRequest != null)) add(HideReason.QUEUED)
             }
             if (reasons.isEmpty()) visible.add(pr) else hidden.add(pr to reasons)
         }

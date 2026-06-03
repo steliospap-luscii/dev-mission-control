@@ -3,13 +3,18 @@
 A local, terminal-based **single source of truth** for a developer juggling multiple
 holacracy roles. Four tabs, one place to look:
 
-- **Dev** — PRs that *genuinely* need your review, after filtering (press `x` to expand the hidden ones).
-- **Platform** — the most-recent failing pipelines, each with an **AI-extracted root cause**
-  (via Claude) instead of a generic "exit code 1" — all failures analyzed in a **single batched
-  call**. Uses your local **`claude` CLI login** by default (no API key); falls back to an API
-  key or a regex excerpt. Press `x` to expand a long cause.
-- **Maintenance** — SonarCloud quality gates + failing conditions, coverage & new-code coverage,
+- **Dev** — PRs that *genuinely* need your review (press `x` to expand the hidden ones with reasons).
+  Hidden when: draft, CI not green, not yet reviewed by `claude[bot]` on the current head, or
+  already **in the merge queue / auto-merge** (effectively done).
+- **Platform** — the most-recent **real** pipeline failures, each with an **AI-extracted root cause**
+  (via Claude) instead of a generic "exit code 1" — all analyzed in a **single batched call**.
+  Quality/policy-gate workflows (SonarCloud/detekt etc.) are filtered out as violations devs fix,
+  not CI errors (configurable). Uses your local **`claude` CLI login** by default (no API key);
+  falls back to an API key or a regex excerpt. Press `x` to expand a long cause.
+- **Maintenance** — the quality metrics the role tracks: coverage & new-code coverage,
   reliability/security/maintainability ratings, bug/vuln/smell/hotspot counts, duplication, LOC.
+  The quality gate is shown as **neutral info** (it "fails" on new-code violations devs fix in
+  their PRs), not a red alarm.
 - **Goals** — role-progress KPIs (branches, unit tests, coverage + new-code coverage vs target,
   with progress bars) and CI health (run count + failure rate) across your repos.
 

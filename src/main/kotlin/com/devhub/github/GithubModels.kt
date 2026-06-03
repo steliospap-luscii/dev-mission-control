@@ -34,6 +34,8 @@ data class PrNode(
     val isDraft: Boolean = false,
     val updatedAt: String = "",
     val headRefOid: String = "",
+    val isInMergeQueue: Boolean = false,
+    val autoMergeRequest: AutoMergeRequest? = null,
     val author: Actor? = null,
     val repository: Repository? = null,
     val commits: CommitConnection = CommitConnection(),
@@ -42,6 +44,9 @@ data class PrNode(
 
 @Serializable
 data class Actor(val login: String = "", @SerialName("__typename") val typename: String = "")
+
+@Serializable
+data class AutoMergeRequest(val enabledAt: String? = null)
 
 @Serializable
 data class Repository(val nameWithOwner: String = "")
