@@ -8,8 +8,8 @@ holacracy roles. Four tabs, one place to look:
   already **in the merge queue / auto-merge** (effectively done).
 - **Platform** — the most-recent **real** pipeline failures, each with an **AI-extracted root cause**
   (via Claude) instead of a generic "exit code 1" — all analyzed in a **single batched call**.
-  Quality/policy-gate workflows (SonarCloud/detekt etc.) are filtered out as violations devs fix,
-  not CI errors (configurable). Uses your local **`claude` CLI login** by default (no API key);
+  Quality/policy-gate workflows (e.g. "Quality Gate", "Linear Issue Check") are filtered out as
+  violations devs fix, not CI errors (configurable list). Uses your local **`claude` CLI login** (no API key);
   falls back to an API key or a regex excerpt. Press `x` to expand a long cause.
 - **Maintenance** — the quality metrics the role tracks: coverage & new-code coverage,
   reliability/security/maintainability ratings, bug/vuln/smell/hotspot counts, duplication, LOC.

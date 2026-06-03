@@ -67,7 +67,7 @@ data class PipelineConfig(
      * Workflow names (case-insensitive substring) treated as quality/policy violations rather
      * than real CI errors, and hidden from the Platform tab — e.g. SonarCloud/detekt gates.
      */
-    val excludeWorkflows: List<String> = listOf("Quality Gate"),
+    val excludeWorkflows: List<String> = listOf("Quality Gate", "Linear Issue Check"),
     /** Use Claude to summarize the real root cause of each failure. */
     val aiAnalysis: Boolean = true,
     /** Backend: "auto" (prefer local `claude` CLI, else API), "cli", "api", or "off". */

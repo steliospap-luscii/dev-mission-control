@@ -123,32 +123,38 @@ fun maintenanceLines(state: DashboardState, selection: Int, width: Int): LineBuf
     }
     b.add(seg("Code quality (SonarCloud)", Theme.accent, bold = true))
     b.blank()
+    // Column widths; PROJECT flexes with terminal width.
+    val cProj = (width - 69).coerceIn(12, 44)
+    val w = intArrayOf(cProj, 4, 6, 6, 1, 1, 1, 5, 5, 6, 5, 6, 7)
+    val labels = listOf("PROJECT", "GATE", "COV", "NEW", "R", "S", "M", "BUGS", "VULN", "SMELL", "HOT", "DUP", "LOC")
+    val header = mutableListOf(seg("  ", DIM))
+    labels.forEachIndexed { j, l -> header += cellSegs(l, w[j], DIM, bold = true) }
+    b.add(header)
+    b.add(rule(width))
+
     state.quality.forEachIndexed { i, q ->
         val sel = i == selection
         if (sel) b.anchorHere()
-        // Gate is shown as neutral info, not a red alarm — it "fails" on new-code violations
-        // that devs fix in their PRs, which isn't a maintenance-role signal.
-        val gateLabel = when (q.gateStatus) { "OK" -> "gate ✓"; "ERROR" -> "gate ◦"; else -> "gate —" }
+        val fg = if (sel) SELECTED else TEXT
+        // Gate is neutral info, not a red alarm — it "fails" on new-code violations devs fix.
+        val gateGlyph = when (q.gateStatus) { "OK" -> "✓"; "ERROR" -> "◦"; else -> "—" }
         val gateColor = if (q.gateStatus == "OK") OK else Theme.info
-        val head = mutableListOf(
-            leadBar(sel),
-            seg(pad(q.projectName, (width - 40).coerceIn(16, 60)), if (sel) SELECTED else TEXT, bold = sel), gut(),
-            seg(pad(gateLabel, 7), gateColor),
-        )
-        if (q.coverage != null) head += seg("  cov ${"%.1f".format(q.coverage)}%", coverageColor(q.coverageDelta))
-        if (q.newCoverage != null) head += seg("  new ${"%.1f".format(q.newCoverage)}%", DIM)
-        b.add(head)
 
-        // Quality metrics the maintenance role actually tracks for improvement.
-        val line = mutableListOf(seg("    ", DIM))
-        line += ratingSegs("R", q.reliabilityRating); line += ratingSegs("S", q.securityRating); line += ratingSegs("M", q.maintainabilityRating)
-        line += seg("  ", DIM)
-        line += countSeg("bugs", q.bugs, danger = true); line += countSeg("vulns", q.vulnerabilities, danger = true)
-        line += countSeg("smells", q.codeSmells ?: q.newCodeSmells); line += countSeg("hotspots", q.securityHotspots)
-        if (q.duplication != null) line += seg("dup ${"%.1f".format(q.duplication)}%  ", if (q.duplication > 3) WARN else DIM)
-        if (q.ncloc != null) line += seg("LOC ${loc(q.ncloc)}", DIM)
-        b.add(line)
-        b.blank()
+        val row = mutableListOf(leadBar(sel))
+        row += cellSegs(q.projectName, w[0], fg, bold = sel)
+        row += cellSegs(gateGlyph, w[1], gateColor)
+        row += cellSegs(q.coverage?.let { "%.0f%%".format(it) } ?: "—", w[2], coverageColor(q.coverageDelta))
+        row += cellSegs(q.newCoverage?.let { "%.0f%%".format(it) } ?: "—", w[3], DIM)
+        row += cellSegs(ratingLetter(q.reliabilityRating), w[4], ratingColor(q.reliabilityRating), bold = true)
+        row += cellSegs(ratingLetter(q.securityRating), w[5], ratingColor(q.securityRating), bold = true)
+        row += cellSegs(ratingLetter(q.maintainabilityRating), w[6], ratingColor(q.maintainabilityRating), bold = true)
+        row += cellSegs(q.bugs?.toString() ?: "—", w[7], countColor(q.bugs, danger = true))
+        row += cellSegs(q.vulnerabilities?.toString() ?: "—", w[8], countColor(q.vulnerabilities, danger = true))
+        row += cellSegs((q.codeSmells ?: q.newCodeSmells)?.toString() ?: "—", w[9], countColor(q.codeSmells ?: q.newCodeSmells))
+        row += cellSegs(q.securityHotspots?.toString() ?: "—", w[10], countColor(q.securityHotspots))
+        row += cellSegs(q.duplication?.let { "%.1f%%".format(it) } ?: "—", w[11], if ((q.duplication ?: 0.0) > 3) WARN else DIM)
+        row += cellSegs(q.ncloc?.let { loc(it) } ?: "—", w[12], DIM)
+        b.add(row)
     }
     return b
 }
@@ -219,13 +225,14 @@ private fun gut(): Seg = seg("  ", DIM)
 
 private fun rule(width: Int): List<Seg> = listOf(seg("  " + "─".repeat((width - 2).coerceIn(10, 198)), DIM))
 
-private fun ratingSegs(label: String, r: Int?): List<Seg> =
-    listOf(seg("$label:", DIM), seg("${ratingLetter(r)} ", ratingColor(r), bold = true))
+/** A padded table cell + a single-space gutter. */
+private fun cellSegs(text: String, w: Int, color: Color, bold: Boolean = false): List<Seg> =
+    listOf(seg(pad(text, w), color, bold = bold), seg(" ", DIM))
 
-private fun countSeg(label: String, value: Int?, danger: Boolean = false): Seg {
-    val v = value ?: 0
-    val color = when { v == 0 -> DIM; danger -> BAD; else -> WARN }
-    return seg("$label $v  ", color)
+private fun countColor(value: Int?, danger: Boolean = false): Color = when {
+    (value ?: 0) == 0 -> DIM
+    danger -> BAD
+    else -> WARN
 }
 
 private fun ratingLetter(r: Int?): String = when (r) { 1 -> "A"; 2 -> "B"; 3 -> "C"; 4 -> "D"; 5 -> "E"; else -> "—" }
