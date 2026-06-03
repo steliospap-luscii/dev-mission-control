@@ -23,6 +23,12 @@ data class ReviewPr(
     val updatedAt: Instant,
 )
 
+/** A PR hidden by the filter, with the reasons, so the Dev tab can expand the "why". */
+data class HiddenPr(
+    val pr: ReviewPr,
+    val reasons: List<String>,
+)
+
 /** A failed CI/CD pipeline run with the extracted error so you see *what* broke. */
 data class FailedPipeline(
     val repo: String,
@@ -31,6 +37,7 @@ data class FailedPipeline(
     val branch: String,
     val failedJob: String?,
     val errorExcerpt: List<String>,
+    val rootCause: String? = null,   // concise AI-extracted cause when available
     val url: String,
     val startedAt: Instant?,
 )
@@ -54,9 +61,15 @@ data class QualityReport(
     val newCoverage: Double? = null, // coverage on new code
     val tests: Int? = null,          // unit test count
     val newCodeSmells: Int?,
+    val codeSmells: Int? = null,
     val securityHotspots: Int?,
     val bugs: Int?,
     val vulnerabilities: Int?,
+    val reliabilityRating: Int? = null,     // 1..5 → A..E
+    val securityRating: Int? = null,
+    val maintainabilityRating: Int? = null,
+    val ncloc: Int? = null,                 // lines of code
+    val duplication: Double? = null,        // % duplicated lines
     val url: String,
 )
 
@@ -88,6 +101,7 @@ data class CiHealth(
 data class DashboardState(
     val prs: List<ReviewPr> = emptyList(),
     val prsHidden: Int = 0,
+    val hiddenPrs: List<HiddenPr> = emptyList(),
     val pipelines: List<FailedPipeline> = emptyList(),
     val quality: List<QualityReport> = emptyList(),
     val metrics: List<TrackedMetric> = emptyList(),

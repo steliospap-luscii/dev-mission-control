@@ -10,6 +10,7 @@ object Keychain {
 
     const val GITHUB_TOKEN = "github-token"
     const val SONAR_TOKEN = "sonar-token"
+    const val ANTHROPIC_TOKEN = "anthropic-token"
 
     fun get(account: String): String? {
         val proc = ProcessBuilder(

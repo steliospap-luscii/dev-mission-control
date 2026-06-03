@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import com.devhub.core.DashboardState
 import com.devhub.core.Poller
 import com.devhub.core.Role
+import com.jakewharton.mosaic.LocalTerminalState
 import com.jakewharton.mosaic.layout.KeyEvent
 import com.jakewharton.mosaic.layout.onKeyEvent
 import com.jakewharton.mosaic.layout.padding
@@ -36,8 +37,11 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
     var activeTab by remember { mutableIntStateOf(0) }
     var selection by remember { mutableIntStateOf(0) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    var showHidden by remember { mutableStateOf(false) }
 
     val tabs = Role.entries
+    // Responsive width: fill the terminal instead of hard-truncating at fixed columns.
+    val width = (LocalTerminalState.current.size.columns - 2).coerceIn(40, 200)
 
     // Single poll path: both the periodic timer and manual `r` bump refreshKey.
     LaunchedEffect(refreshKey) {
@@ -79,6 +83,7 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
                 "ArrowDown", "j" -> { if (itemCount() > 0) selection = (selection + 1).coerceAtMost(itemCount() - 1); true }
                 "ArrowUp", "k" -> { selection = (selection - 1).coerceAtLeast(0); true }
                 "Enter", "o", "O" -> { openSelected(); true }
+                "x", "X", " " -> { showHidden = !showHidden; true }
                 else -> false
             }
         },
@@ -87,10 +92,10 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
         TabBar(tabs, activeTab, state)
         Text("")
         when (tabs[activeTab]) {
-            Role.DEV -> DevPanel(state, selection)
-            Role.PLATFORM -> PlatformPanel(state, selection)
-            Role.MAINTENANCE -> MaintenancePanel(state, selection)
-            Role.GOALS -> GoalsPanel(state, selection)
+            Role.DEV -> DevPanel(state, selection, width, showHidden)
+            Role.PLATFORM -> PlatformPanel(state, selection, width)
+            Role.MAINTENANCE -> MaintenancePanel(state, selection, width)
+            Role.GOALS -> GoalsPanel(state, selection, width)
         }
         Text("")
         Footer()
@@ -136,7 +141,7 @@ private fun TabBar(tabs: List<Role>, active: Int, state: DashboardState) {
 @Composable
 private fun Footer() {
     Text(
-        "↑/↓ move   ←/→ or Tab switch   enter/o open   r refresh   q quit",
+        "↑/↓ move   ←/→ Tab switch   enter/o open   x expand   r refresh   q quit",
         color = Theme.dim,
     )
 }

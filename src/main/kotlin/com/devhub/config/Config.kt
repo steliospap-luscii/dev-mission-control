@@ -25,6 +25,7 @@ data class Config(
     val notifications: Boolean = true,
     val prFilter: PrFilterConfig = PrFilterConfig(),
     val progress: ProgressConfig = ProgressConfig(),
+    val pipelines: PipelineConfig = PipelineConfig(),
 ) {
     /** Repos whose branches are counted on the Goals tab; defaults to the pipeline repos. */
     fun branchRepos(): List<String> = progress.branchRepos.ifEmpty { pipelineRepos }
@@ -54,6 +55,16 @@ data class PrFilterConfig(
     val requireClaudeBotReviewed: Boolean = true,
     val requireNotDraft: Boolean = true,
     val requireCiGreen: Boolean = true,
+)
+
+@Serializable
+data class PipelineConfig(
+    /** Cap the Platform tab to the N most-recent failures across watched repos. */
+    val maxShown: Int = 5,
+    /** Use Claude to summarize the real root cause of each failure (needs an Anthropic key). */
+    val aiAnalysis: Boolean = true,
+    /** Anthropic model for root-cause analysis (fast + cheap by default). */
+    val aiModel: String = "claude-haiku-4-5",
 )
 
 @Serializable

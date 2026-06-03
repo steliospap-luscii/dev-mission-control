@@ -65,14 +65,17 @@ private fun dashboard() {
     }
     cfg.validationIssues().forEach { t.println(gray("note: $it")) }
 
-    val sonar = Keychain.get(Keychain.SONAR_TOKEN)
-    val poller = Poller(cfg, gh, sonar)
+    val poller = Poller(cfg, gh, Keychain.get(Keychain.SONAR_TOKEN), anthropicToken())
     try {
         runBlocking { runDashboard(poller, cfg.pollSeconds) }
     } finally {
         poller.close()
     }
 }
+
+/** Anthropic key from the Keychain, falling back to the ANTHROPIC_API_KEY env var. */
+private fun anthropicToken(): String? =
+    Keychain.get(Keychain.ANTHROPIC_TOKEN) ?: System.getenv("ANTHROPIC_API_KEY")
 
 // ---------------- auth ----------------
 
@@ -85,6 +88,10 @@ private fun auth() {
     t.println(gray("SonarCloud: a user token (Account ▸ Security). Optional — leave blank to skip."))
     val sonar = readSecret("SonarCloud token (blank to skip): ")
     if (sonar.isNotBlank()) { Keychain.set(Keychain.SONAR_TOKEN, sonar); t.println(brightGreen("✓ SonarCloud token saved.")) }
+
+    t.println(gray("Anthropic: an API key (console.anthropic.com) for AI root-cause analysis of pipeline failures. Optional."))
+    val anthropic = readSecret("Anthropic API key (blank to skip): ")
+    if (anthropic.isNotBlank()) { Keychain.set(Keychain.ANTHROPIC_TOKEN, anthropic); t.println(brightGreen("✓ Anthropic key saved.")) }
 
     t.println("Run ${bold("devhub doctor")} to verify connectivity.")
 }
@@ -125,6 +132,11 @@ private fun config() {
     val newCovGoal = ask("New-code coverage goal %", existing.progress.newCoverageGoalPct.toInt().toString())
         .toDoubleOrNull() ?: existing.progress.newCoverageGoalPct
 
+    val maxPipes = ask("Max pipeline failures to show", existing.pipelines.maxShown.toString())
+        .toIntOrNull() ?: existing.pipelines.maxShown
+    val aiOn = ask("AI root-cause analysis of failures? (y/n)", if (existing.pipelines.aiAnalysis) "y" else "n")
+        .lowercase().startsWith("y")
+
     val poll = ask("Poll interval (seconds)", existing.pollSeconds.toString()).toIntOrNull() ?: existing.pollSeconds
     val notify = ask("Desktop notifications? (y/n)", if (existing.notifications) "y" else "n")
         .lowercase().startsWith("y")
@@ -135,6 +147,7 @@ private fun config() {
         claudeBotLogin = botLogin,
         sonar = SonarConfig(baseUrl = sonarBase, organization = sonarOrg, projectKeys = sonarProjects),
         progress = existing.progress.copy(coverageGoalPct = covGoal, newCoverageGoalPct = newCovGoal),
+        pipelines = existing.pipelines.copy(maxShown = maxPipes, aiAnalysis = aiOn),
         pollSeconds = poll,
         notifications = notify,
     )
@@ -158,21 +171,28 @@ private fun probe() {
     val gh = Keychain.get(Keychain.GITHUB_TOKEN) ?: run {
         t.println(brightYellow("No GitHub token. Run `devhub auth`.")); return
     }
-    val state = Poller(cfg, gh, Keychain.get(Keychain.SONAR_TOKEN)).use { runBlocking { it.pollOnce() } }
+    val state = Poller(cfg, gh, Keychain.get(Keychain.SONAR_TOKEN), anthropicToken())
+        .use { runBlocking { it.pollOnce() } }
 
     t.println(bold("\nDEV — ${state.prs.size} PR(s) need your review") + gray("  (${state.prsHidden} hidden by filter)"))
     state.prs.forEach { t.println("  ${brightGreen("●")} #${it.number} ${it.title}  ${gray(it.repo)}") }
 
     t.println(bold("\nPLATFORM — ${state.pipelines.size} failing pipeline(s)"))
-    state.pipelines.take(10).forEach {
-        t.println("  ${brightRed("✗")} ${it.repo} · ${it.workflowName} · ${it.branch}" + gray("  (${it.failedJob ?: "?"})"))
-        it.errorExcerpt.lastOrNull()?.let { line -> t.println(gray("      │ $line")) }
+    state.pipelines.forEach { p ->
+        val repo = p.repo.substringAfterLast('/')
+        t.println("  ${brightRed("✗")} $repo · ${p.workflowName} · ${p.branch}" + gray("  (${p.failedJob ?: "?"})"))
+        val cause = p.rootCause
+        if (cause != null) cause.lines().filter { it.isNotBlank() }.forEach { t.println("      $it") }
+        else p.errorExcerpt.lastOrNull()?.let { t.println(gray("      │ $it")) }
     }
 
     t.println(bold("\nMAINTENANCE — ${state.quality.size} project(s)"))
     state.quality.forEach { q ->
         val gate = if (q.gateStatus == "OK") brightGreen("PASSED") else if (q.gateStatus == "ERROR") brightRed("FAILED") else gray("—")
-        t.println("  ${q.projectName}  gate $gate" + (q.coverage?.let { gray("  coverage ${"%.1f".format(it)}%") } ?: ""))
+        t.println("  ${q.projectName}  gate $gate" + (q.coverage?.let { gray("  cov ${"%.1f".format(it)}%") } ?: "") + (q.newCoverage?.let { gray("  new ${"%.1f".format(it)}%") } ?: ""))
+        fun letter(r: Int?) = when (r) { 1 -> "A"; 2 -> "B"; 3 -> "C"; 4 -> "D"; 5 -> "E"; else -> "—" }
+        val extra = listOfNotNull(q.duplication?.let { "dup ${"%.1f".format(it)}%" }, q.ncloc?.let { "LOC $it" }).joinToString(" · ")
+        t.println(gray("      R:${letter(q.reliabilityRating)} S:${letter(q.securityRating)} M:${letter(q.maintainabilityRating)} · bugs ${q.bugs ?: 0} · vulns ${q.vulnerabilities ?: 0} · smells ${q.codeSmells ?: q.newCodeSmells ?: 0} · hotspots ${q.securityHotspots ?: 0}" + if (extra.isNotBlank()) " · $extra" else ""))
         q.failingConditions.forEach { c -> t.println("      ${brightRed("└")} ${c.label}: ${c.actual} ${c.op} ${c.threshold}") }
     }
 
@@ -187,7 +207,7 @@ private fun probe() {
     t.println(bold("CI health (recent runs):"))
     state.ci.forEach { h ->
         val top = h.topFailingWorkflow?.let { gray("  (most-failing: $it)") } ?: ""
-        t.println("  ${h.repo}: ${"%.0f".format(h.failureRatePct)}% fail · ${h.failed}/${h.total} runs$top")
+        t.println("  ${h.repo.substringAfterLast('/')}: ${"%.0f".format(h.failureRatePct)}% fail · ${h.failed}/${h.total} runs$top")
     }
 
     if (state.errors.isNotEmpty()) state.errors.forEach { t.println(brightYellow("⚠ $it")) }
@@ -210,6 +230,12 @@ private fun doctor() {
             }.onSuccess { t.println(brightGreen("✓ GitHub OK — $it PR(s) in your review queue (pre-filter).")) }
                 .onFailure { t.println(brightRed("✗ GitHub failed: ${it.message}")) }
         }
+    }
+
+    when {
+        anthropicToken() == null -> t.println(gray("• Anthropic key not set — pipeline AI root-cause off (regex excerpt used)."))
+        !cfg.pipelines.aiAnalysis -> t.println(gray("• AI analysis disabled in config."))
+        else -> t.println(brightGreen("✓ AI root-cause enabled (model ${cfg.pipelines.aiModel})."))
     }
 
     val sonar = Keychain.get(Keychain.SONAR_TOKEN)

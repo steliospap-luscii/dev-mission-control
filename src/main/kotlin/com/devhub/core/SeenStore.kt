@@ -20,6 +20,7 @@ data class SeenState(
     val seenPrUrls: Set<String> = emptySet(),
     val lastCoverage: Map<String, Double> = emptyMap(),
     val lastMetrics: Map<String, Double> = emptyMap(),  // Goals-tab KPI values, for deltas
+    val pipelineCauses: Map<String, String> = emptyMap(), // "repo#runId" -> AI root cause (logs are immutable)
 )
 
 object SeenStore {

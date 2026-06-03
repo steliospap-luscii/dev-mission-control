@@ -82,40 +82,53 @@ class GithubClient(private val token: String) : AutoCloseable {
         )
     }
 
-    /** Failed Actions runs across the watched repos, each with an extracted error excerpt. */
-    suspend fun fetchFailedPipelines(repos: List<String>, perRepo: Int = 5): List<FailedPipeline> =
-        repos.flatMap { repo -> runCatching { failedRunsFor(repo, perRepo) }.getOrElse { emptyList() } }
-            .sortedByDescending { it.startedAt ?: Instant.DISTANT_PAST }
+    /** A failed pipeline plus the cleaned log tail, so callers can run AI root-cause analysis. */
+    data class FailureWithLog(val pipeline: FailedPipeline, val logTail: String)
 
-    private suspend fun failedRunsFor(repo: String, perRepo: Int): List<FailedPipeline> {
-        val (owner, name) = parseRepo(repo)
-        val runs: WorkflowRunsResponse = http.get("$REST/repos/$owner/$name/actions/runs") {
-            parameter("status", "failure")
-            parameter("per_page", perRepo)
-        }.body()
+    /**
+     * The [limit] most-recent failed Actions runs across [repos]. Cheap run metadata is
+     * fetched per-repo first, then sorted and capped — so we only download job logs for the
+     * handful we'll actually show.
+     */
+    suspend fun fetchRecentFailures(repos: List<String>, limit: Int): List<FailureWithLog> {
+        val recent = repos.flatMap { repo ->
+            runCatching {
+                val (owner, name) = parseRepo(repo)
+                http.get("$REST/repos/$owner/$name/actions/runs") {
+                    parameter("status", "failure")
+                    parameter("per_page", limit.coerceIn(1, 100))
+                }.body<WorkflowRunsResponse>().workflowRuns.map { repo to it }
+            }.getOrElse { emptyList() }
+        }.sortedByDescending { it.second.runStartedAt ?: "" }.take(limit.coerceAtLeast(1))
 
-        return runs.workflowRuns.map { run ->
-            val (jobName, excerpt) = runCatching { firstFailedJobError(owner, name, run.id) }
-                .getOrElse { null to listOf("(could not read job logs: ${it.message})") }
-            FailedPipeline(
-                repo = repo,
-                runId = run.id,
-                workflowName = run.name ?: run.displayTitle ?: "workflow",
-                branch = run.headBranch ?: "?",
-                failedJob = jobName,
-                errorExcerpt = excerpt,
-                url = run.htmlUrl,
-                startedAt = run.runStartedAt?.let { runCatching { Instant.parse(it) }.getOrNull() },
-            )
+        return recent.mapNotNull { (repo, run) ->
+            runCatching {
+                val (owner, name) = parseRepo(repo)
+                val (jobName, rawLog) = failedJobLog(owner, name, run.id)
+                FailureWithLog(
+                    pipeline = FailedPipeline(
+                        repo = repo,
+                        runId = run.id,
+                        workflowName = run.name ?: run.displayTitle ?: "workflow",
+                        branch = run.headBranch ?: "?",
+                        failedJob = jobName,
+                        errorExcerpt = if (rawLog.isBlank()) listOf("(no logs)") else LogExtractor.errorLines(rawLog),
+                        url = run.htmlUrl,
+                        startedAt = run.runStartedAt?.let { runCatching { Instant.parse(it) }.getOrNull() },
+                    ),
+                    logTail = LogExtractor.cleanTail(rawLog),
+                )
+            }.getOrNull()
         }
     }
 
-    private suspend fun firstFailedJobError(owner: String, name: String, runId: Long): Pair<String?, List<String>> {
+    private suspend fun failedJobLog(owner: String, name: String, runId: Long): Pair<String?, String> {
         val jobs: JobsResponse = http.get("$REST/repos/$owner/$name/actions/runs/$runId/jobs").body()
-        val failed = jobs.jobs.firstOrNull { it.conclusion == "failure" } ?: return null to emptyList()
+        val failed = jobs.jobs.firstOrNull { it.conclusion == "failure" } ?: return null to ""
         // /logs 302-redirects to a (pre-signed) plain-text log; Ktor follows it.
-        val log = http.get("$REST/repos/$owner/$name/actions/jobs/${failed.id}/logs").bodyAsText()
-        return failed.name to LogExtractor.errorLines(log)
+        val log = runCatching { http.get("$REST/repos/$owner/$name/actions/jobs/${failed.id}/logs").bodyAsText() }
+            .getOrDefault("")
+        return failed.name to log
     }
 
     override fun close() = http.close()

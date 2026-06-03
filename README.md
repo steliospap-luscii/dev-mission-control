@@ -3,11 +3,15 @@
 A local, terminal-based **single source of truth** for a developer juggling multiple
 holacracy roles. Four tabs, one place to look:
 
-- **Dev** — PRs that *genuinely* need your review, after filtering.
-- **Platform** — failing CI pipelines, with the actual error excerpt inline.
-- **Maintenance** — SonarCloud quality gates, coverage (with local trend), smells, hotspots.
-- **Goals** — role-progress KPIs (branches, unit tests, coverage + new-code coverage vs target)
-  and CI health (run count + failure rate) across your repos.
+- **Dev** — PRs that *genuinely* need your review, after filtering (press `x` to expand the hidden ones).
+- **Platform** — the most-recent failing pipelines, each with an **AI-extracted root cause**
+  (via Claude) instead of a generic "exit code 1" — falls back to a regex excerpt without a key.
+- **Maintenance** — SonarCloud quality gates + failing conditions, coverage & new-code coverage,
+  reliability/security/maintainability ratings, bug/vuln/smell/hotspot counts, duplication, LOC.
+- **Goals** — role-progress KPIs (branches, unit tests, coverage + new-code coverage vs target,
+  with progress bars) and CI health (run count + failure rate) across your repos.
+
+The UI is responsive to terminal width, and lists expand/collapse with `x`.
 
 Everything runs on your machine. The only network calls are authenticated requests to
 GitHub and SonarCloud. Tokens live in the **macOS Keychain**, never in files or the repo.
@@ -72,6 +76,9 @@ devhub           # launch the live dashboard
 - **GitHub** — a fine-grained PAT with read access to **Pull requests**, **Actions**, **Contents**
   on the relevant repos.
 - **SonarCloud** — a user token (Account ▸ Security). Optional; without it the Maintenance tab is disabled.
+- **Anthropic** — an API key ([console.anthropic.com](https://console.anthropic.com)) for AI root-cause
+  analysis on the Platform tab. Optional; also read from `ANTHROPIC_API_KEY`. Results are cached per
+  run (logs are immutable) and only the capped most-recent failures are analyzed, so cost stays low.
 
 > **SonarCloud token scope:** `measures/component` (coverage, test counts, smells) needs **Browse**
 > permission on the project. Tokens without it get a misleading `404 "Project doesn't exist"`.
@@ -83,8 +90,8 @@ devhub           # launch the live dashboard
 
 ```
 ↑/↓ or j/k   move selection      ←/→ or Tab   switch tab
-enter / o    open in browser     r            refresh now
-q            quit
+enter / o    open in browser     x            expand/collapse (hidden PRs)
+r            refresh now          q            quit
 ```
 
 ## Layout

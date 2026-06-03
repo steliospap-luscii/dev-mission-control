@@ -29,6 +29,8 @@ class SonarClient(private val cfg: SonarConfig, token: String) : AutoCloseable {
         "coverage", "new_coverage", "tests",
         "new_code_smells", "code_smells",
         "security_hotspots", "bugs", "vulnerabilities",
+        "reliability_rating", "security_rating", "sqale_rating",
+        "ncloc", "duplicated_lines_density",
     ).joinToString(",")
 
     /** One report per configured project. Failures degrade to a NONE-gate stub, never throw. */
@@ -64,11 +66,16 @@ class SonarClient(private val cfg: SonarConfig, token: String) : AutoCloseable {
             coverageDelta = null, // filled in by Poller from the seen-state store
             newCoverage = c?.metric("new_coverage")?.toDoubleOrNull(),
             tests = c?.metric("tests")?.toDoubleOrNull()?.toInt(),
-            newCodeSmells = c?.metric("new_code_smells")?.toDoubleOrNull()?.toInt()
-                ?: c?.metric("code_smells")?.toDoubleOrNull()?.toInt(),
+            newCodeSmells = c?.metric("new_code_smells")?.toDoubleOrNull()?.toInt(),
+            codeSmells = c?.metric("code_smells")?.toDoubleOrNull()?.toInt(),
             securityHotspots = c?.metric("security_hotspots")?.toDoubleOrNull()?.toInt(),
             bugs = c?.metric("bugs")?.toDoubleOrNull()?.toInt(),
             vulnerabilities = c?.metric("vulnerabilities")?.toDoubleOrNull()?.toInt(),
+            reliabilityRating = c?.metric("reliability_rating")?.toDoubleOrNull()?.toInt(),
+            securityRating = c?.metric("security_rating")?.toDoubleOrNull()?.toInt(),
+            maintainabilityRating = c?.metric("sqale_rating")?.toDoubleOrNull()?.toInt(),
+            ncloc = c?.metric("ncloc")?.toDoubleOrNull()?.toInt(),
+            duplication = c?.metric("duplicated_lines_density")?.toDoubleOrNull(),
             url = "${cfg.baseUrl}/dashboard?id=$projectKey",
         )
     }

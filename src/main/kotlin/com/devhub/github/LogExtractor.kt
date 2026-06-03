@@ -49,6 +49,16 @@ object LogExtractor {
         }
     }
 
+    /** Cleaned (timestamp/ANSI/noise-stripped) tail of a log, for feeding to an LLM. */
+    fun cleanTail(rawLog: String, maxChars: Int = 6000): String {
+        val cleaned = rawLog.lineSequence()
+            .map { it.replace(TIMESTAMP, "").replace(ANSI, "").trimEnd() }
+            .filter { it.isNotBlank() && !NOISE.containsMatchIn(it) }
+            .map { it.removePrefix(ERROR_MARKER) }
+            .joinToString("\n")
+        return if (cleaned.length <= maxChars) cleaned else cleaned.takeLast(maxChars)
+    }
+
     /** A window of up to MAX_LINES ending at [end], not starting before [floor]. */
     private fun window(size: Int, end: Int, floor: Int = 0): IntRange {
         val start = (end - MAX_LINES + 1).coerceAtLeast(floor).coerceAtLeast(0)

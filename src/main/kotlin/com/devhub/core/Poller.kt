@@ -1,5 +1,6 @@
 package com.devhub.core
 
+import com.devhub.ai.AnthropicClient
 import com.devhub.config.Config
 import com.devhub.github.GithubClient
 import com.devhub.github.PrFilter
@@ -22,10 +23,14 @@ class Poller(
     private val config: Config,
     githubToken: String,
     sonarToken: String?,
+    anthropicToken: String? = null,
 ) : AutoCloseable {
 
     private val github = GithubClient(githubToken)
     private val sonar = sonarToken?.let { SonarClient(config.sonar, it) }
+    private val anthropic = anthropicToken
+        ?.takeIf { config.pipelines.aiAnalysis }
+        ?.let { AnthropicClient(it, config.pipelines.aiModel) }
 
     /** Emits a fresh state immediately, then re-polls every `config.pollSeconds`. */
     fun stream(): Flow<DashboardState> = flow {
@@ -45,7 +50,7 @@ class Poller(
         }
         val pipelinesDeferred = async {
             if (config.pipelineRepos.isEmpty()) emptyList()
-            else runCatching { github.fetchFailedPipelines(config.pipelineRepos) }
+            else runCatching { github.fetchRecentFailures(config.pipelineRepos, config.pipelines.maxShown) }
                 .onFailure { errors += "GitHub Actions: ${it.message}" }
                 .getOrDefault(emptyList())
         }
@@ -72,15 +77,18 @@ class Poller(
         }
 
         val prNodes = prsDeferred.await()
-        val pipelines = pipelinesDeferred.await()
+        val failures = pipelinesDeferred.await()
         val rawQuality = qualityDeferred.await()
         val branches = branchesDeferred.await()
         val ci = ciDeferred.await()
 
+        val prev = SeenStore.load()
         val filter = PrFilter.apply(prNodes, config.prFilter, config.claudeBotLogin)
 
-        // Coverage deltas from the seen-state store, then persist + notify.
-        val prev = SeenStore.load()
+        // AI root-cause per failure, cached by run (Actions logs are immutable).
+        val (pipelines, causes) = analyzeFailures(failures, prev, errors)
+
+        // Coverage deltas from the seen-state store.
         val quality = rawQuality.map { q ->
             val last = prev.lastCoverage[q.projectKey]
             if (q.coverage != null && last != null) q.copy(coverageDelta = q.coverage - last) else q
@@ -96,12 +104,14 @@ class Poller(
                 seenPrUrls = filter.visible.map { it.url }.toSet(),
                 lastCoverage = quality.mapNotNull { q -> q.coverage?.let { q.projectKey to it } }.toMap(),
                 lastMetrics = metrics.mapNotNull { m -> m.value?.let { m.key to it } }.toMap(),
+                pipelineCauses = causes,
             ),
         )
 
         DashboardState(
             prs = filter.visible,
             prsHidden = filter.hidden.size,
+            hiddenPrs = filter.hidden.map { HiddenPr(it.first, it.second.map { r -> r.label }) },
             pipelines = pipelines,
             quality = quality,
             metrics = metrics,
@@ -110,6 +120,28 @@ class Poller(
             errors = errors,
             loading = false,
         )
+    }
+
+    /**
+     * Runs Claude root-cause analysis on each failure (in parallel), reusing cached results
+     * for runs we've already analyzed. Returns the enriched pipelines and the cache to persist.
+     */
+    private suspend fun analyzeFailures(
+        failures: List<GithubClient.FailureWithLog>,
+        prev: SeenState,
+        errors: MutableList<String>,
+    ): Pair<List<FailedPipeline>, Map<String, String>> = coroutineScope {
+        val ai = anthropic ?: return@coroutineScope failures.map { it.pipeline } to emptyMap()
+        val results = failures.map { fwl ->
+            async {
+                val key = "${fwl.pipeline.repo}#${fwl.pipeline.runId}"
+                val cause = prev.pipelineCauses[key] ?: runCatching {
+                    ai.rootCause(fwl.pipeline.workflowName, fwl.pipeline.failedJob, fwl.pipeline.branch, fwl.logTail)
+                }.onFailure { errors += "AI analysis: ${it.message}" }.getOrNull()?.ifBlank { null }
+                fwl.pipeline.copy(rootCause = cause) to cause?.let { key to it }
+            }
+        }.awaitAll()
+        results.map { it.first } to results.mapNotNull { it.second }.toMap()
     }
 
     /** Builds the Goals-tab KPIs from the configured progress project, with deltas vs last poll. */
@@ -150,5 +182,6 @@ class Poller(
     override fun close() {
         github.close()
         sonar?.close()
+        anthropic?.close()
     }
 }
