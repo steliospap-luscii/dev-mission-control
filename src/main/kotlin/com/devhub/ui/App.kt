@@ -22,6 +22,7 @@ import com.jakewharton.mosaic.ui.Row
 import com.jakewharton.mosaic.ui.Text
 import com.jakewharton.mosaic.ui.TextStyle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.seconds
 
@@ -37,17 +38,19 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
     var activeTab by remember { mutableIntStateOf(0) }
     var selection by remember { mutableIntStateOf(0) }
     var refreshKey by remember { mutableIntStateOf(0) }
-    var showHidden by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
 
     val tabs = Role.entries
     // Responsive width: fill the terminal instead of hard-truncating at fixed columns.
     val width = (LocalTerminalState.current.size.columns - 2).coerceIn(40, 200)
 
-    // Single poll path: both the periodic timer and manual `r` bump refreshKey.
+    // Single poll path: both the periodic timer and manual `r` bump refreshKey. The poll emits
+    // a fast slice (PRs/Sonar/Goals) first, then a full slice (pipelines + AI) — so the UI paints
+    // immediately instead of waiting on the slow AI step.
     LaunchedEffect(refreshKey) {
         state = state.copy(loading = true)
-        state = runCatching { poller.pollOnce() }
-            .getOrElse { state.copy(loading = false, errors = listOf("poll failed: ${it.message}")) }
+        runCatching { poller.pollProgressive().collect { state = it } }
+            .onFailure { state = state.copy(loading = false, errors = listOf("poll failed: ${it.message}")) }
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -83,7 +86,7 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
                 "ArrowDown", "j" -> { if (itemCount() > 0) selection = (selection + 1).coerceAtMost(itemCount() - 1); true }
                 "ArrowUp", "k" -> { selection = (selection - 1).coerceAtLeast(0); true }
                 "Enter", "o", "O" -> { openSelected(); true }
-                "x", "X", " " -> { showHidden = !showHidden; true }
+                "x", "X", " " -> { expanded = !expanded; true }
                 else -> false
             }
         },
@@ -91,12 +94,16 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
         Header(state)
         TabBar(tabs, activeTab, state)
         Text("")
-        when (tabs[activeTab]) {
-            Role.DEV -> DevPanel(state, selection, width, showHidden)
-            Role.PLATFORM -> PlatformPanel(state, selection, width)
-            Role.MAINTENANCE -> MaintenancePanel(state, selection, width)
-            Role.GOALS -> GoalsPanel(state, selection, width)
+        val body = when (tabs[activeTab]) {
+            Role.DEV -> devLines(state, selection, width, expanded)
+            Role.PLATFORM -> platformLines(state, selection, width, expanded)
+            Role.MAINTENANCE -> maintenanceLines(state, selection, width)
+            Role.GOALS -> goalsLines(state, selection, width)
         }
+        // Clip the body to the terminal height (chrome ≈ 8 rows) so the inline frame never
+        // overflows — overflow is what duplicates the UI when content grows.
+        val rows = LocalTerminalState.current.size.rows
+        RenderLines(body, (rows - 8).coerceAtLeast(3))
         Text("")
         Footer()
         if (state.errors.isNotEmpty()) {
@@ -107,11 +114,13 @@ suspend fun runDashboard(poller: Poller, pollSeconds: Int) = runMosaic {
 
 @Composable
 private fun Header(state: DashboardState) {
-    val refreshed = if (state.loading) "refreshing…" else "updated ${Format.ago(state.lastRefresh)} ago"
     Row {
-        Text("devhub", color = Theme.accent, textStyle = TextStyle.Bold)
-        Text("  —  single source of truth", color = Theme.dim)
-        Text("   [$refreshed]", color = Theme.dim)
+        Text("◆ devhub", color = Theme.highlight, textStyle = TextStyle.Bold)
+        Text("  mission control", color = Theme.accent)
+        Text(
+            "   ${if (state.loading) "◴ syncing…" else "✓ synced ${Format.ago(state.lastRefresh)} ago"}",
+            color = if (state.loading) Theme.info else Theme.dim,
+        )
     }
 }
 

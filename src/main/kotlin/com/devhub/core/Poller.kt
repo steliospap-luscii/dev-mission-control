@@ -1,18 +1,18 @@
 package com.devhub.core
 
 import com.devhub.ai.Analyzers
+import com.devhub.ai.FailureInput
 import com.devhub.config.Config
 import com.devhub.github.GithubClient
 import com.devhub.github.PrFilter
 import com.devhub.sonar.SonarClient
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.last
 import kotlinx.datetime.Clock
-import kotlin.time.Duration.Companion.seconds
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Coordinates every data source into a single [DashboardState] each poll,
@@ -31,116 +31,112 @@ class Poller(
     private val analyzer = if (!config.pipelines.aiAnalysis) null
         else Analyzers.create(config.pipelines.aiBackend, config.pipelines.aiModel, anthropicToken)
 
-    /** Emits a fresh state immediately, then re-polls every `config.pollSeconds`. */
-    fun stream(): Flow<DashboardState> = flow {
-        while (true) {
-            emit(pollOnce())
-            delay(config.pollSeconds.coerceAtLeast(15).seconds)
-        }
-    }
+    /** Single full poll (used by `probe`). */
+    suspend fun pollOnce(): DashboardState = pollProgressive().last()
 
-    suspend fun pollOnce(): DashboardState = coroutineScope {
-        val errors = mutableListOf<String>()
+    /**
+     * One poll, emitted in two slices so the UI paints fast:
+     *   1. PRs + Sonar + Goals KPIs (everything cheap) — emitted immediately, `loading = true`.
+     *   2. pipelines + batched AI root-cause — emitted when ready, `loading = false`.
+     */
+    fun pollProgressive(): Flow<DashboardState> = flow {
+        coroutineScope {
+            val errors = CopyOnWriteArrayList<String>()
 
-        val prsDeferred = async {
-            runCatching { github.fetchReviewQueue() }
-                .onFailure { errors += "GitHub PRs: ${it.message}" }
-                .getOrDefault(emptyList())
-        }
-        val pipelinesDeferred = async {
-            if (config.pipelineRepos.isEmpty()) emptyList()
-            else runCatching { github.fetchRecentFailures(config.pipelineRepos, config.pipelines.maxShown) }
-                .onFailure { errors += "GitHub Actions: ${it.message}" }
-                .getOrDefault(emptyList())
-        }
-        val qualityDeferred = async {
-            if (sonar == null) emptyList()
-            else runCatching { sonar.fetchAll() }
-                .onFailure { errors += "SonarCloud: ${it.message}" }
-                .getOrDefault(emptyList())
-        }
-        // Goals-tab inputs.
-        val branchesDeferred = async {
-            val repos = config.branchRepos()
-            if (repos.isEmpty()) null
-            else runCatching { repos.sumOf { github.fetchBranchCount(it) } }
-                .onFailure { errors += "GitHub branches: ${it.message}" }
-                .getOrNull()
-        }
-        val ciDeferred = async {
-            config.ciRepos().mapNotNull { repo ->
-                runCatching { github.fetchCiHealth(repo, config.progress.ciWindow) }
-                    .onFailure { errors += "CI health ($repo): ${it.message}" }
-                    .getOrNull()
+            // Kick everything off concurrently; the slow part (pipelines + AI) is awaited last.
+            val pipelinesDeferred = async {
+                if (config.pipelineRepos.isEmpty()) emptyList()
+                else runCatching { github.fetchRecentFailures(config.pipelineRepos, config.pipelines.maxShown) }
+                    .onFailure { errors += "GitHub Actions: ${it.message}" }
+                    .getOrDefault(emptyList())
             }
+            val prsDeferred = async {
+                runCatching { github.fetchReviewQueue() }
+                    .onFailure { errors += "GitHub PRs: ${it.message}" }.getOrDefault(emptyList())
+            }
+            val qualityDeferred = async {
+                if (sonar == null) emptyList()
+                else runCatching { sonar.fetchAll() }
+                    .onFailure { errors += "SonarCloud: ${it.message}" }.getOrDefault(emptyList())
+            }
+            val branchesDeferred = async {
+                val repos = config.branchRepos()
+                if (repos.isEmpty()) null
+                else runCatching { repos.sumOf { github.fetchBranchCount(it) } }
+                    .onFailure { errors += "GitHub branches: ${it.message}" }.getOrNull()
+            }
+            val ciDeferred = async {
+                config.ciRepos().mapNotNull { repo ->
+                    runCatching { github.fetchCiHealth(repo, config.progress.ciWindow) }
+                        .onFailure { errors += "CI health ($repo): ${it.message}" }.getOrNull()
+                }
+            }
+
+            val prev = SeenStore.load()
+
+            // --- fast slice ---
+            val filter = PrFilter.apply(prsDeferred.await(), config.prFilter, config.claudeBotLogin)
+            val quality = qualityDeferred.await().map { q ->
+                val last = prev.lastCoverage[q.projectKey]
+                if (q.coverage != null && last != null) q.copy(coverageDelta = q.coverage - last) else q
+            }
+            val metrics = buildMetrics(branchesDeferred.await(), quality, prev)
+
+            val base = DashboardState(
+                prs = filter.visible,
+                prsHidden = filter.hidden.size,
+                hiddenPrs = filter.hidden.map { HiddenPr(it.first, it.second.map { r -> r.label }) },
+                quality = quality,
+                metrics = metrics,
+                ci = ciDeferred.await(),
+                lastRefresh = Clock.System.now(),
+                errors = errors.toList(),
+                loading = true, // pipelines + AI still pending
+            )
+            emit(base)
+
+            // --- slow slice: pipelines + batched AI ---
+            val (pipelines, causes) = analyzeFailures(pipelinesDeferred.await(), prev, errors)
+            if (config.notifications) emitNotifications(prev, filter.visible, pipelines)
+            SeenStore.save(
+                prev.copy(
+                    initialized = true,
+                    seenPipelineRuns = pipelines.map { it.runId }.toSet(),
+                    seenPrUrls = filter.visible.map { it.url }.toSet(),
+                    lastCoverage = quality.mapNotNull { q -> q.coverage?.let { q.projectKey to it } }.toMap(),
+                    lastMetrics = metrics.mapNotNull { m -> m.value?.let { m.key to it } }.toMap(),
+                    pipelineCauses = causes,
+                ),
+            )
+            emit(base.copy(pipelines = pipelines, errors = errors.toList(), loading = false))
         }
-
-        val prNodes = prsDeferred.await()
-        val failures = pipelinesDeferred.await()
-        val rawQuality = qualityDeferred.await()
-        val branches = branchesDeferred.await()
-        val ci = ciDeferred.await()
-
-        val prev = SeenStore.load()
-        val filter = PrFilter.apply(prNodes, config.prFilter, config.claudeBotLogin)
-
-        // AI root-cause per failure, cached by run (Actions logs are immutable).
-        val (pipelines, causes) = analyzeFailures(failures, prev, errors)
-
-        // Coverage deltas from the seen-state store.
-        val quality = rawQuality.map { q ->
-            val last = prev.lastCoverage[q.projectKey]
-            if (q.coverage != null && last != null) q.copy(coverageDelta = q.coverage - last) else q
-        }
-        val metrics = buildMetrics(branches, quality, prev)
-
-        if (config.notifications) emitNotifications(prev, filter.visible, pipelines)
-
-        SeenStore.save(
-            prev.copy(
-                initialized = true,
-                seenPipelineRuns = pipelines.map { it.runId }.toSet(),
-                seenPrUrls = filter.visible.map { it.url }.toSet(),
-                lastCoverage = quality.mapNotNull { q -> q.coverage?.let { q.projectKey to it } }.toMap(),
-                lastMetrics = metrics.mapNotNull { m -> m.value?.let { m.key to it } }.toMap(),
-                pipelineCauses = causes,
-            ),
-        )
-
-        DashboardState(
-            prs = filter.visible,
-            prsHidden = filter.hidden.size,
-            hiddenPrs = filter.hidden.map { HiddenPr(it.first, it.second.map { r -> r.label }) },
-            pipelines = pipelines,
-            quality = quality,
-            metrics = metrics,
-            ci = ci,
-            lastRefresh = Clock.System.now(),
-            errors = errors,
-            loading = false,
-        )
     }
 
     /**
-     * Runs Claude root-cause analysis on each failure (in parallel), reusing cached results
-     * for runs we've already analyzed. Returns the enriched pipelines and the cache to persist.
+     * Batched Claude root-cause analysis: one call for ALL uncached failures, merged with the
+     * per-run cache (Actions logs are immutable, so a run is analyzed at most once).
      */
     private suspend fun analyzeFailures(
         failures: List<GithubClient.FailureWithLog>,
         prev: SeenState,
         errors: MutableList<String>,
-    ): Pair<List<FailedPipeline>, Map<String, String>> = coroutineScope {
-        val ai = analyzer ?: return@coroutineScope failures.map { it.pipeline } to emptyMap()
-        val results = failures.map { fwl ->
-            async {
-                val key = "${fwl.pipeline.repo}#${fwl.pipeline.runId}"
-                val cause = prev.pipelineCauses[key] ?: runCatching {
-                    ai.rootCause(fwl.pipeline.workflowName, fwl.pipeline.failedJob, fwl.pipeline.branch, fwl.logTail)
-                }.onFailure { errors += "AI analysis: ${it.message}" }.getOrNull()?.ifBlank { null }
-                fwl.pipeline.copy(rootCause = cause) to cause?.let { key to it }
-            }
-        }.awaitAll()
-        results.map { it.first } to results.mapNotNull { it.second }.toMap()
+    ): Pair<List<FailedPipeline>, Map<String, String>> {
+        fun key(p: FailedPipeline) = "${p.repo}#${p.runId}"
+        val ai = analyzer ?: return failures.map { it.pipeline } to emptyMap()
+
+        val uncached = failures.filter { prev.pipelineCauses[key(it.pipeline)] == null }
+        val fresh: Map<Long, String> = if (uncached.isEmpty()) emptyMap() else runCatching {
+            ai.rootCauses(
+                uncached.map {
+                    FailureInput(it.pipeline.runId, it.pipeline.workflowName, it.pipeline.failedJob, it.pipeline.branch, it.logTail)
+                },
+            )
+        }.onFailure { errors += "AI analysis: ${it.message}" }.getOrDefault(emptyMap())
+
+        val pipelines = failures.map { fwl ->
+            fwl.pipeline.copy(rootCause = prev.pipelineCauses[key(fwl.pipeline)] ?: fresh[fwl.pipeline.runId])
+        }
+        return pipelines to pipelines.mapNotNull { p -> p.rootCause?.let { key(p) to it } }.toMap()
     }
 
     /** Builds the Goals-tab KPIs from the configured progress project, with deltas vs last poll. */

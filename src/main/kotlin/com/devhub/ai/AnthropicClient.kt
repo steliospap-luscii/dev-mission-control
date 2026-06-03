@@ -16,8 +16,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Thin Anthropic Messages-API client used to turn a noisy CI job log into a concise,
- * human root cause — far more useful than the regex excerpt for gnarly failures.
+ * Anthropic Messages-API backend. One batched request analyzes all failures at once.
+ * Used only when the `api` backend is selected (needs a console API key).
  */
 class AnthropicClient(apiKey: String, private val model: String) : FailureAnalyzer {
 
@@ -30,41 +30,28 @@ class AnthropicClient(apiKey: String, private val model: String) : FailureAnalyz
         expectSuccess = true
     }
 
-    override suspend fun rootCause(workflow: String, job: String?, branch: String, logTail: String): String {
-        val user = buildString {
-            appendLine("Workflow: $workflow")
-            appendLine("Job: ${job ?: "?"}")
-            appendLine("Branch: $branch")
-            appendLine()
-            appendLine("Failed job log (tail):")
-            append(logTail)
-        }
+    override suspend fun rootCauses(failures: List<FailureInput>): Map<Long, String> {
+        if (failures.isEmpty()) return emptyMap()
         val resp: MessageResponse = http.post(ENDPOINT) {
             contentType(ContentType.Application.Json)
             setBody(
                 MessageRequest(
                     model = model,
-                    maxTokens = 250,
+                    maxTokens = 1024,
                     temperature = 0.0,
-                    system = SYSTEM,
-                    messages = listOf(Message("user", user)),
+                    system = BatchPrompt.INSTRUCTION,
+                    messages = listOf(Message("user", BatchPrompt.buildInput(failures))),
                 ),
             )
         }.body()
-        return resp.content.firstOrNull { it.type == "text" }?.text?.trim().orEmpty()
+        val text = resp.content.firstOrNull { it.type == "text" }?.text.orEmpty()
+        return BatchPrompt.parse(text)
     }
 
     override fun close() = http.close()
 
     companion object {
         private const val ENDPOINT = "https://api.anthropic.com/v1/messages"
-        private val SYSTEM = """
-            You analyze failed GitHub Actions job logs. Reply with the single most likely
-            ROOT CAUSE of the failure in ONE short sentence, then a second line beginning
-            "→ " with the key error/assertion/exception (verbatim if possible). Ignore
-            generic wrapper noise like "Process completed with exit code 1", "##[debug]",
-            and step boundaries. Be specific and terse. No preamble, no markdown.
-        """.trimIndent()
     }
 }
 

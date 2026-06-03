@@ -5,14 +5,17 @@ holacracy roles. Four tabs, one place to look:
 
 - **Dev** — PRs that *genuinely* need your review, after filtering (press `x` to expand the hidden ones).
 - **Platform** — the most-recent failing pipelines, each with an **AI-extracted root cause**
-  (via Claude) instead of a generic "exit code 1". Uses your local **`claude` CLI login** by
-  default (no API key); falls back to an API key or a regex excerpt.
+  (via Claude) instead of a generic "exit code 1" — all failures analyzed in a **single batched
+  call**. Uses your local **`claude` CLI login** by default (no API key); falls back to an API
+  key or a regex excerpt. Press `x` to expand a long cause.
 - **Maintenance** — SonarCloud quality gates + failing conditions, coverage & new-code coverage,
   reliability/security/maintainability ratings, bug/vuln/smell/hotspot counts, duplication, LOC.
 - **Goals** — role-progress KPIs (branches, unit tests, coverage + new-code coverage vs target,
   with progress bars) and CI health (run count + failure rate) across your repos.
 
-The UI is responsive to terminal width, and lists expand/collapse with `x`.
+The UI uses a Catppuccin-Mocha "mission control" palette, is responsive to terminal width, and
+paints **progressively** — the fast tabs (Dev/Maintenance/Goals) render in a couple of seconds
+while pipeline AI analysis fills in after. Lists and long causes expand/collapse with `x`.
 
 Everything runs on your machine. The only network calls are authenticated requests to
 GitHub and SonarCloud. Tokens live in the **macOS Keychain**, never in files or the repo.
