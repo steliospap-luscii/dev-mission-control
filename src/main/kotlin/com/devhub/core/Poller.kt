@@ -1,6 +1,6 @@
 package com.devhub.core
 
-import com.devhub.ai.AnthropicClient
+import com.devhub.ai.Analyzers
 import com.devhub.config.Config
 import com.devhub.github.GithubClient
 import com.devhub.github.PrFilter
@@ -28,9 +28,8 @@ class Poller(
 
     private val github = GithubClient(githubToken)
     private val sonar = sonarToken?.let { SonarClient(config.sonar, it) }
-    private val anthropic = anthropicToken
-        ?.takeIf { config.pipelines.aiAnalysis }
-        ?.let { AnthropicClient(it, config.pipelines.aiModel) }
+    private val analyzer = if (!config.pipelines.aiAnalysis) null
+        else Analyzers.create(config.pipelines.aiBackend, config.pipelines.aiModel, anthropicToken)
 
     /** Emits a fresh state immediately, then re-polls every `config.pollSeconds`. */
     fun stream(): Flow<DashboardState> = flow {
@@ -131,7 +130,7 @@ class Poller(
         prev: SeenState,
         errors: MutableList<String>,
     ): Pair<List<FailedPipeline>, Map<String, String>> = coroutineScope {
-        val ai = anthropic ?: return@coroutineScope failures.map { it.pipeline } to emptyMap()
+        val ai = analyzer ?: return@coroutineScope failures.map { it.pipeline } to emptyMap()
         val results = failures.map { fwl ->
             async {
                 val key = "${fwl.pipeline.repo}#${fwl.pipeline.runId}"
@@ -182,6 +181,6 @@ class Poller(
     override fun close() {
         github.close()
         sonar?.close()
-        anthropic?.close()
+        analyzer?.close()
     }
 }

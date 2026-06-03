@@ -61,10 +61,12 @@ data class PrFilterConfig(
 data class PipelineConfig(
     /** Cap the Platform tab to the N most-recent failures across watched repos. */
     val maxShown: Int = 5,
-    /** Use Claude to summarize the real root cause of each failure (needs an Anthropic key). */
+    /** Use Claude to summarize the real root cause of each failure. */
     val aiAnalysis: Boolean = true,
-    /** Anthropic model for root-cause analysis (fast + cheap by default). */
-    val aiModel: String = "claude-haiku-4-5",
+    /** Backend: "auto" (prefer local `claude` CLI, else API), "cli", "api", or "off". */
+    val aiBackend: String = "auto",
+    /** Model override; blank = backend default (CLI uses your Claude Code default). */
+    val aiModel: String = "",
 )
 
 @Serializable

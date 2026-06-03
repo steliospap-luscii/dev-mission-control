@@ -4,6 +4,7 @@ import com.devhub.config.Config
 import com.devhub.config.ConfigStore
 import com.devhub.config.Keychain
 import com.devhub.config.SonarConfig
+import com.devhub.ai.Analyzers
 import com.devhub.core.Poller
 import com.devhub.ui.runDashboard
 import com.github.ajalt.mordant.rendering.TextColors.brightCyan
@@ -89,7 +90,8 @@ private fun auth() {
     val sonar = readSecret("SonarCloud token (blank to skip): ")
     if (sonar.isNotBlank()) { Keychain.set(Keychain.SONAR_TOKEN, sonar); t.println(brightGreen("✓ SonarCloud token saved.")) }
 
-    t.println(gray("Anthropic: an API key (console.anthropic.com) for AI root-cause analysis of pipeline failures. Optional."))
+    t.println(gray("Anthropic API key — OPTIONAL. Only needed for the 'api' AI backend."))
+    t.println(gray("By default devhub uses your local `claude` CLI login (claude /login) — no key required."))
     val anthropic = readSecret("Anthropic API key (blank to skip): ")
     if (anthropic.isNotBlank()) { Keychain.set(Keychain.ANTHROPIC_TOKEN, anthropic); t.println(brightGreen("✓ Anthropic key saved.")) }
 
@@ -136,6 +138,8 @@ private fun config() {
         .toIntOrNull() ?: existing.pipelines.maxShown
     val aiOn = ask("AI root-cause analysis of failures? (y/n)", if (existing.pipelines.aiAnalysis) "y" else "n")
         .lowercase().startsWith("y")
+    val aiBackend = if (aiOn) ask("AI backend (auto/cli/api/off)", existing.pipelines.aiBackend.ifBlank { "auto" })
+        else existing.pipelines.aiBackend
 
     val poll = ask("Poll interval (seconds)", existing.pollSeconds.toString()).toIntOrNull() ?: existing.pollSeconds
     val notify = ask("Desktop notifications? (y/n)", if (existing.notifications) "y" else "n")
@@ -147,7 +151,7 @@ private fun config() {
         claudeBotLogin = botLogin,
         sonar = SonarConfig(baseUrl = sonarBase, organization = sonarOrg, projectKeys = sonarProjects),
         progress = existing.progress.copy(coverageGoalPct = covGoal, newCoverageGoalPct = newCovGoal),
-        pipelines = existing.pipelines.copy(maxShown = maxPipes, aiAnalysis = aiOn),
+        pipelines = existing.pipelines.copy(maxShown = maxPipes, aiAnalysis = aiOn, aiBackend = aiBackend),
         pollSeconds = poll,
         notifications = notify,
     )
@@ -232,10 +236,15 @@ private fun doctor() {
         }
     }
 
-    when {
-        anthropicToken() == null -> t.println(gray("• Anthropic key not set — pipeline AI root-cause off (regex excerpt used)."))
-        !cfg.pipelines.aiAnalysis -> t.println(gray("• AI analysis disabled in config."))
-        else -> t.println(brightGreen("✓ AI root-cause enabled (model ${cfg.pipelines.aiModel})."))
+    if (!cfg.pipelines.aiAnalysis) {
+        t.println(gray("• AI root-cause disabled in config."))
+    } else {
+        val desc = Analyzers.describe(cfg.pipelines.aiBackend, anthropicToken())
+        if (desc.startsWith("Claude CLI") || desc.startsWith("Anthropic")) {
+            t.println(brightGreen("✓ AI root-cause via $desc."))
+        } else {
+            t.println(gray("• AI root-cause: $desc — regex excerpt used as fallback."))
+        }
     }
 
     val sonar = Keychain.get(Keychain.SONAR_TOKEN)

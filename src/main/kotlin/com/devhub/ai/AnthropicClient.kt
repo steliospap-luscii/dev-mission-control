@@ -19,7 +19,7 @@ import kotlinx.serialization.json.Json
  * Thin Anthropic Messages-API client used to turn a noisy CI job log into a concise,
  * human root cause — far more useful than the regex excerpt for gnarly failures.
  */
-class AnthropicClient(apiKey: String, private val model: String) : AutoCloseable {
+class AnthropicClient(apiKey: String, private val model: String) : FailureAnalyzer {
 
     private val http = HttpClient(CIO) {
         install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
@@ -30,7 +30,7 @@ class AnthropicClient(apiKey: String, private val model: String) : AutoCloseable
         expectSuccess = true
     }
 
-    suspend fun rootCause(workflow: String, job: String?, branch: String, logTail: String): String {
+    override suspend fun rootCause(workflow: String, job: String?, branch: String, logTail: String): String {
         val user = buildString {
             appendLine("Workflow: $workflow")
             appendLine("Job: ${job ?: "?"}")

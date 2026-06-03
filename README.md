@@ -5,7 +5,8 @@ holacracy roles. Four tabs, one place to look:
 
 - **Dev** — PRs that *genuinely* need your review, after filtering (press `x` to expand the hidden ones).
 - **Platform** — the most-recent failing pipelines, each with an **AI-extracted root cause**
-  (via Claude) instead of a generic "exit code 1" — falls back to a regex excerpt without a key.
+  (via Claude) instead of a generic "exit code 1". Uses your local **`claude` CLI login** by
+  default (no API key); falls back to an API key or a regex excerpt.
 - **Maintenance** — SonarCloud quality gates + failing conditions, coverage & new-code coverage,
   reliability/security/maintainability ratings, bug/vuln/smell/hotspot counts, duplication, LOC.
 - **Goals** — role-progress KPIs (branches, unit tests, coverage + new-code coverage vs target,
@@ -76,9 +77,11 @@ devhub           # launch the live dashboard
 - **GitHub** — a fine-grained PAT with read access to **Pull requests**, **Actions**, **Contents**
   on the relevant repos.
 - **SonarCloud** — a user token (Account ▸ Security). Optional; without it the Maintenance tab is disabled.
-- **Anthropic** — an API key ([console.anthropic.com](https://console.anthropic.com)) for AI root-cause
-  analysis on the Platform tab. Optional; also read from `ANTHROPIC_API_KEY`. Results are cached per
-  run (logs are immutable) and only the capped most-recent failures are analyzed, so cost stays low.
+- **Claude for AI root-cause** — by default devhub shells out to the **`claude` CLI** (Claude Code)
+  using whatever auth you already have (`claude /login` — subscription or org), so **no API key is
+  needed**. If you'd rather use the Anthropic API directly, set the `api` backend and provide a key
+  via `devhub auth` or `ANTHROPIC_API_KEY`. Pick the backend in `devhub config` (`auto`/`cli`/`api`/`off`).
+  Results are cached per run and only the capped most-recent failures are analyzed, so cost/usage stays low.
 
 > **SonarCloud token scope:** `measures/component` (coverage, test counts, smells) needs **Browse**
 > permission on the project. Tokens without it get a misleading `404 "Project doesn't exist"`.
