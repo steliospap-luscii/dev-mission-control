@@ -1,0 +1,11 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.idea/
+*.iml
+.DS_Store
+local.properties
+
+# devhub never stores secrets in-repo; tokens live in the macOS Keychain.
+# config.json lives in ~/.config/devhub/ — but ignore any stray local copy:
+/config.json
